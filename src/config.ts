@@ -38,9 +38,9 @@ export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
 export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
 
 export const CONTAINER_IMAGE =
-  process.env.CONTAINER_IMAGE || 'nanoclaw-agent:latest';
+  process.env.CONTAINER_IMAGE || 'nanoclaw-agent:v1.3-fast-recovery-prism';
 export const CONTAINER_TIMEOUT = parseInt(
-  process.env.CONTAINER_TIMEOUT || '1800000',
+  process.env.CONTAINER_TIMEOUT || '7200000',
   10,
 );
 export const CONTAINER_MAX_OUTPUT_SIZE = parseInt(
@@ -53,6 +53,10 @@ export const CREDENTIAL_PROXY_PORT = parseInt(
 );
 export const IPC_POLL_INTERVAL = 1000;
 export const IDLE_TIMEOUT = parseInt(process.env.IDLE_TIMEOUT || '1800000', 10); // 30min default — how long to keep container alive after last result
+export const SESSION_MAX_MESSAGES = parseInt(
+  process.env.SESSION_MAX_MESSAGES || '200',
+  10,
+);
 export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
   parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,
@@ -71,3 +75,13 @@ export const TRIGGER_PATTERN = new RegExp(
 // Uses system timezone by default
 export const TIMEZONE =
   process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+// Tokens used as dedicated per-group bots (bot2, etc.) — excluded from the swarm pool
+const _dedicatedTokens = new Set(
+  [process.env.TELEGRAM_BOT2_TOKEN].filter(Boolean) as string[],
+);
+
+export const TELEGRAM_BOT_POOL = (process.env.TELEGRAM_BOT_POOL || '')
+  .split(',')
+  .map((t) => t.trim())
+  .filter((t) => t && !_dedicatedTokens.has(t));

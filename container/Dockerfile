@@ -24,7 +24,30 @@ RUN apt-get update && apt-get install -y \
     libxshmfence1 \
     curl \
     git \
+    python3 \
+    python3-pip \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
+
+# Install TA-Lib C library (built from source, required by Python TA-Lib wrapper)
+RUN cd /tmp && \
+    curl -L -o ta-lib-0.4.0-src.tar.gz https://github.com/ta-lib/ta-lib/releases/download/v0.4.0/ta-lib-0.4.0-src.tar.gz && \
+    tar -xzf ta-lib-0.4.0-src.tar.gz && \
+    cd ta-lib && \
+    ./configure --prefix=/usr && \
+    make && \
+    make install && \
+    rm -rf /tmp/ta-lib*
+
+# Install Python packages for btc-quant
+RUN pip3 install --break-system-packages \
+    fastapi \
+    "uvicorn[standard]" \
+    numpy \
+    pandas \
+    quantstats \
+    pytest \
+    TA-Lib
 
 # Set Chromium path for agent-browser
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
@@ -32,6 +55,10 @@ ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
 # Install agent-browser and claude-code globally
 RUN npm install -g agent-browser @anthropic-ai/claude-code
+
+# Install fetch-kline tool
+COPY skills/fetch-kline/fetch-kline.sh /usr/local/bin/fetch-kline
+RUN chmod +x /usr/local/bin/fetch-kline
 
 # Create app directory
 WORKDIR /app

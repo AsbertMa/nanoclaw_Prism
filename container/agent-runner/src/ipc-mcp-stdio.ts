@@ -63,6 +63,29 @@ server.tool(
 );
 
 server.tool(
+  'send_file',
+  "Send a file (PDF, image, etc.) to the user or group. The file must exist in the group workspace (/workspace/group/). Provide the filename or relative path within the group workspace.",
+  {
+    file_path: z.string().describe('Filename or relative path within /workspace/group/ (e.g. "report.pdf" or "output/chart.png")'),
+    caption: z.string().optional().describe('Optional caption to show with the file'),
+  },
+  async (args) => {
+    const data: Record<string, string | undefined> = {
+      type: 'file',
+      chatJid,
+      filePath: args.file_path,
+      caption: args.caption,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(MESSAGES_DIR, data);
+
+    return { content: [{ type: 'text' as const, text: 'File queued for delivery.' }] };
+  },
+);
+
+server.tool(
   'schedule_task',
   `Schedule a recurring or one-time task. The task will run as a full agent with access to all tools. Returns the task ID for future reference. To modify an existing task, use update_task instead.
 

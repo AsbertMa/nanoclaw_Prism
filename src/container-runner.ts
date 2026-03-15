@@ -14,6 +14,7 @@ import {
   DATA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
+  SESSION_MAX_MESSAGES,
   TIMEZONE,
 } from './config.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
@@ -27,7 +28,7 @@ import {
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
 import { validateAdditionalMounts } from './mount-security.js';
-import { RegisteredGroup } from './types.js';
+import { ContainerConfig, RegisteredGroup } from './types.js';
 
 // Sentinel markers for robust output parsing (must match agent-runner)
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
@@ -221,6 +222,12 @@ function buildContainerArgs(
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
 
+  // Pass model override if configured
+  const claudeModel = process.env.CLAUDE_MODEL;
+  if (claudeModel) {
+    args.push('-e', `CLAUDE_MODEL=${claudeModel}`);
+  }
+
   // Route API traffic through the credential proxy (containers never see real secrets)
   args.push(
     '-e',
@@ -264,6 +271,26 @@ function buildContainerArgs(
   return args;
 }
 
+function applyContainerConfig(
+  args: string[],
+  containerConfig?: ContainerConfig,
+): void {
+  const imageIdx = args.lastIndexOf(CONTAINER_IMAGE);
+
+  // Pass session max messages config
+  const maxMessages =
+    containerConfig?.maxResumeMessages || SESSION_MAX_MESSAGES;
+  args.splice(imageIdx, 0, '-e', `SESSION_MAX_MESSAGES=${maxMessages}`);
+
+  // Insert port mappings
+  if (containerConfig?.ports) {
+    const newImageIdx = args.lastIndexOf(CONTAINER_IMAGE);
+    for (const port of containerConfig.ports) {
+      args.splice(newImageIdx, 0, '-p', port);
+    }
+  }
+}
+
 export async function runContainerAgent(
   group: RegisteredGroup,
   input: ContainerInput,
@@ -279,6 +306,7 @@ export async function runContainerAgent(
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
   const containerArgs = buildContainerArgs(mounts, containerName);
+  applyContainerConfig(containerArgs, group.containerConfig);
 
   logger.debug(
     {

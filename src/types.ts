@@ -30,6 +30,9 @@ export interface AllowedRoot {
 export interface ContainerConfig {
   additionalMounts?: AdditionalMount[];
   timeout?: number; // Default: 300000 (5 minutes)
+  ports?: string[]; // Port mappings, e.g. ["8765:8765"]
+  maxResumeMessages?: number; // Max transcript lines before forcing new session (default: 200)
+  poolTokens?: string[]; // Per-group bot pool tokens (overrides global TELEGRAM_BOT_POOL)
 }
 
 export interface RegisteredGroup {
@@ -90,6 +93,8 @@ export interface Channel {
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
   // Optional: sync group/chat names from the platform.
   syncGroups?(force: boolean): Promise<void>;
+  // Optional: send a file/document to a chat.
+  sendDocument?(jid: string, filePath: string, caption?: string): Promise<void>;
 }
 
 // Callback type that channels use to deliver inbound messages

@@ -103,11 +103,15 @@ export function ensureContainerRuntimeRunning(): void {
 /** Kill orphaned NanoClaw containers from previous runs. */
 export function cleanupOrphans(): void {
   try {
+    // Use --format without --filter to avoid a Docker Desktop hang on macOS 12
     const output = execSync(
-      `${CONTAINER_RUNTIME_BIN} ps --filter name=nanoclaw- --format '{{.Names}}'`,
-      { stdio: ['pipe', 'pipe', 'pipe'], encoding: 'utf-8' },
+      `${CONTAINER_RUNTIME_BIN} ps --format '{{.Names}}'`,
+      { stdio: ['pipe', 'pipe', 'pipe'], encoding: 'utf-8', timeout: 10000 },
     );
-    const orphans = output.trim().split('\n').filter(Boolean);
+    const orphans = output
+      .trim()
+      .split('\n')
+      .filter((n) => n.startsWith('nanoclaw-'));
     for (const name of orphans) {
       try {
         execSync(stopContainer(name), { stdio: 'pipe' });

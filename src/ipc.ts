@@ -3,7 +3,14 @@ import path from 'path';
 
 import { CronExpressionParser } from 'cron-parser';
 
-import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
+import {
+  ASSISTANT_NAME,
+  DATA_DIR,
+  GROUPS_DIR,
+  IPC_POLL_INTERVAL,
+  TIMEZONE,
+} from './config.js';
+import { sendPoolMessage } from './channels/telegram.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
@@ -12,6 +19,11 @@ import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
+  sendDocument: (
+    jid: string,
+    filePath: string,
+    caption?: string,
+  ) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -80,7 +92,20 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   isMain ||
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
-                  await deps.sendMessage(data.chatJid, data.text);
+                  const isSwarmSender =
+                    data.sender &&
+                    data.sender.toLowerCase() !== ASSISTANT_NAME.toLowerCase();
+                  if (isSwarmSender && data.chatJid.startsWith('tg:')) {
+                    await sendPoolMessage(
+                      data.chatJid,
+                      data.text,
+                      data.sender,
+                      sourceGroup,
+                      (jid, text) => deps.sendMessage(jid, text),
+                    );
+                  } else {
+                    await deps.sendMessage(data.chatJid, data.text);
+                  }
                   logger.info(
                     { chatJid: data.chatJid, sourceGroup },
                     'IPC message sent',
@@ -89,6 +114,42 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   logger.warn(
                     { chatJid: data.chatJid, sourceGroup },
                     'Unauthorized IPC message attempt blocked',
+                  );
+                }
+              } else if (
+                data.type === 'file' &&
+                data.chatJid &&
+                data.filePath
+              ) {
+                // filePath is relative to /workspace/group inside the container
+                // which maps to GROUPS_DIR/{sourceGroup}/ on the host
+                const targetGroup = registeredGroups[data.chatJid];
+                if (
+                  isMain ||
+                  (targetGroup && targetGroup.folder === sourceGroup)
+                ) {
+                  const hostPath = path.join(
+                    GROUPS_DIR,
+                    sourceGroup,
+                    data.filePath,
+                  );
+                  if (fs.existsSync(hostPath)) {
+                    await deps.sendDocument(
+                      data.chatJid,
+                      hostPath,
+                      data.caption,
+                    );
+                    logger.info(
+                      { chatJid: data.chatJid, hostPath },
+                      'IPC file sent',
+                    );
+                  } else {
+                    logger.error({ hostPath }, 'IPC file not found on host');
+                  }
+                } else {
+                  logger.warn(
+                    { chatJid: data.chatJid, sourceGroup },
+                    'Unauthorized IPC file attempt blocked',
                   );
                 }
               }

@@ -6,6 +6,7 @@ import {
   CREDENTIAL_PROXY_PORT,
   IDLE_TIMEOUT,
   POLL_INTERVAL,
+  TELEGRAM_BOT_POOL,
   TIMEZONE,
   TRIGGER_PATTERN,
 } from './config.js';
@@ -46,6 +47,7 @@ import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
+import { initBotPool, initGroupBotPool } from './channels/telegram.js';
 import {
   restoreRemoteControl,
   startRemoteControl,
@@ -597,6 +599,18 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  if (TELEGRAM_BOT_POOL.length > 0) {
+    await initBotPool(TELEGRAM_BOT_POOL);
+  }
+
+  // Initialize per-group bot pools from containerConfig.poolTokens
+  for (const group of Object.values(registeredGroups)) {
+    const tokens = group.containerConfig?.poolTokens;
+    if (tokens && tokens.length > 0) {
+      await initGroupBotPool(group.folder, tokens);
+    }
+  }
+
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
     registeredGroups: () => registeredGroups,
@@ -619,6 +633,12 @@ async function main(): Promise<void> {
       const channel = findChannel(channels, jid);
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
       return channel.sendMessage(jid, text);
+    },
+    sendDocument: (jid, filePath, caption) => {
+      const channel = findChannel(channels, jid);
+      if (!channel?.sendDocument)
+        throw new Error(`No sendDocument support for JID: ${jid}`);
+      return channel.sendDocument(jid, filePath, caption);
     },
     registeredGroups: () => registeredGroups,
     registerGroup,

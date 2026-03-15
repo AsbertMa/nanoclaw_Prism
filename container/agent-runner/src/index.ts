@@ -197,6 +197,54 @@ function generateFallbackName(): string {
   return `conversation-${time.getHours().toString().padStart(2, '0')}${time.getMinutes().toString().padStart(2, '0')}`;
 }
 
+const SESSION_MAX_MESSAGES = parseInt(process.env.SESSION_MAX_MESSAGES || '200', 10);
+
+/**
+ * Count lines in a session transcript to determine if it's too large to resume.
+ */
+function getTranscriptLineCount(sessionId: string): number {
+  const projectDir = '/home/node/.claude/projects/-workspace-group';
+  const transcriptPath = path.join(projectDir, `${sessionId}.jsonl`);
+  if (!fs.existsSync(transcriptPath)) return 0;
+  try {
+    const content = fs.readFileSync(transcriptPath, 'utf-8');
+    return content.split('\n').filter(l => l.trim()).length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Extract a brief summary from the last N messages of a transcript.
+ */
+function extractRecentContext(sessionId: string, maxMessages: number = 10): string {
+  const projectDir = '/home/node/.claude/projects/-workspace-group';
+  const transcriptPath = path.join(projectDir, `${sessionId}.jsonl`);
+  if (!fs.existsSync(transcriptPath)) return '';
+
+  try {
+    const content = fs.readFileSync(transcriptPath, 'utf-8');
+    const messages = parseTranscript(content);
+    if (messages.length === 0) return '';
+
+    // Get session summary if available
+    const summary = getSessionSummary(sessionId, transcriptPath);
+
+    // Get last few messages for recent context
+    const recent = messages.slice(-maxMessages);
+    const recentText = recent
+      .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.slice(0, 200)}`)
+      .join('\n');
+
+    let context = '[Previous session context]\n';
+    if (summary) context += `Summary: ${summary}\n\n`;
+    context += `Recent conversation:\n${recentText}`;
+    return context;
+  } catch {
+    return '';
+  }
+}
+
 interface ParsedMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -392,6 +440,7 @@ async function runQuery(
   for await (const message of query({
     prompt: stream,
     options: {
+      model: sdkEnv.CLAUDE_MODEL || undefined,
       cwd: '/workspace/group',
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
@@ -489,6 +538,20 @@ async function main(): Promise<void> {
   const mcpServerPath = path.join(__dirname, 'ipc-mcp-stdio.js');
 
   let sessionId = containerInput.sessionId;
+  let sessionContext = ''; // Context from rotated session
+
+  // Check if session is too large to resume efficiently
+  if (sessionId) {
+    const lineCount = getTranscriptLineCount(sessionId);
+    if (lineCount > SESSION_MAX_MESSAGES) {
+      log(`Session ${sessionId} has ${lineCount} lines (limit: ${SESSION_MAX_MESSAGES}), rotating to new session`);
+      sessionContext = extractRecentContext(sessionId);
+      sessionId = undefined; // Force new session
+    } else {
+      log(`Session ${sessionId} has ${lineCount} lines, resuming normally`);
+    }
+  }
+
   fs.mkdirSync(IPC_INPUT_DIR, { recursive: true });
 
   // Clean up stale _close sentinel from previous container runs
@@ -505,6 +568,11 @@ async function main(): Promise<void> {
     prompt += '\n' + pending.join('\n');
   }
 
+  // Prepend context from rotated session
+  if (sessionContext) {
+    prompt = sessionContext + '\n\n---\n\n' + prompt;
+  }
+
   // Query loop: run query → wait for IPC message → run new query → repeat
   let resumeAt: string | undefined;
   try {
@@ -517,6 +585,17 @@ async function main(): Promise<void> {
       }
       if (queryResult.lastAssistantUuid) {
         resumeAt = queryResult.lastAssistantUuid;
+      }
+
+      // Check if session should be rotated proactively (before next message)
+      if (sessionId) {
+        const lineCount = getTranscriptLineCount(sessionId);
+        if (lineCount > SESSION_MAX_MESSAGES) {
+          log(`Session ${sessionId} reached ${lineCount} lines, rotating proactively`);
+          sessionContext = extractRecentContext(sessionId);
+          sessionId = undefined;
+          resumeAt = undefined;
+        }
       }
 
       // If _close was consumed during the query, exit immediately.
@@ -541,6 +620,10 @@ async function main(): Promise<void> {
 
       log(`Got new message (${nextMessage.length} chars), starting new query`);
       prompt = nextMessage;
+      if (sessionContext) {
+        prompt = sessionContext + '\n\n---\n\n' + prompt;
+        sessionContext = ''; // Only prepend once
+      }
     }
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
