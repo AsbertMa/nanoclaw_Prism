@@ -22,6 +22,16 @@ vi.mock('fs', async () => {
   };
 });
 
+vi.mock('child_process', async () => {
+  const actual =
+    await vi.importActual<typeof import('child_process')>('child_process');
+  return { ...actual, exec: vi.fn() };
+});
+
+vi.mock('./container-runtime.js', () => ({
+  stopContainer: (name: string) => `docker stop ${name}`,
+}));
+
 describe('GroupQueue', () => {
   let queue: GroupQueue;
 
@@ -435,12 +445,17 @@ describe('GroupQueue', () => {
 
   // --- Persistent container behavior ---
 
-  it('persistent container stays active after processMessages completes', async () => {
+  it('persistent container schedules restart when processMessages completes (crash/exit)', async () => {
     let resolveProcess: () => void;
+    let callCount = 0;
     const processMessages = vi.fn(async () => {
-      await new Promise<void>((resolve) => {
-        resolveProcess = resolve;
-      });
+      callCount++;
+      if (callCount === 1) {
+        // First call: block until released (simulates running container)
+        await new Promise<void>((resolve) => {
+          resolveProcess = resolve;
+        });
+      }
       return true;
     });
 
@@ -457,13 +472,17 @@ describe('GroupQueue', () => {
       true, // persistent
     );
 
-    // Complete processMessages — persistent container should stay active
+    // Complete processMessages — persistent container exited unexpectedly
     resolveProcess!();
     await vi.advanceTimersByTimeAsync(10);
 
-    // Container should still accept messages (active = true, not cleared)
+    // Container should be cleared (restart pending via scheduleRetry)
     const sent = queue.sendMessage('group1@g.us', 'follow-up');
-    expect(sent).toBe(true);
+    expect(sent).toBe(false); // state cleared, restart scheduled
+
+    // After retry delay, processMessages should be called again
+    await vi.advanceTimersByTimeAsync(5000 + 10);
+    expect(callCount).toBe(2);
   });
 
   it('persistent container does not preempt on notifyIdle', async () => {
@@ -583,5 +602,70 @@ describe('GroupQueue', () => {
 
     resolveProcess!();
     await vi.advanceTimersByTimeAsync(10);
+  });
+
+  // --- Persistent shutdown behavior ---
+
+  it('shutdown stops persistent containers via docker stop', async () => {
+    const { exec } = await import('child_process');
+    const mockExec = vi.mocked(exec);
+    mockExec.mockClear();
+
+    let resolveProcess: () => void;
+    const processMessages = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolveProcess = resolve;
+      });
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+
+    queue.registerProcess(
+      'group1@g.us',
+      { killed: false } as any,
+      'nanoclaw-persistent-1',
+      'test-group',
+      true, // persistent
+    );
+
+    await queue.shutdown(5000);
+
+    expect(mockExec).toHaveBeenCalledWith(
+      expect.stringContaining('stop nanoclaw-persistent-1'),
+      expect.any(Object),
+    );
+  });
+
+  it('shutdown detaches non-persistent containers (no docker stop)', async () => {
+    const { exec } = await import('child_process');
+    const mockExec = vi.mocked(exec);
+    mockExec.mockClear();
+
+    let resolveProcess: () => void;
+    const processMessages = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolveProcess = resolve;
+      });
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+    queue.enqueueMessageCheck('group1@g.us');
+    await vi.advanceTimersByTimeAsync(10);
+
+    queue.registerProcess(
+      'group1@g.us',
+      { killed: false } as any,
+      'nanoclaw-regular-1',
+      'test-group',
+      // not persistent
+    );
+
+    await queue.shutdown(5000);
+
+    expect(mockExec).not.toHaveBeenCalled();
   });
 });

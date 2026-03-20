@@ -1,9 +1,10 @@
-import { ChildProcess } from 'child_process';
+import { ChildProcess, exec } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
 import { DATA_DIR, MAX_CONCURRENT_CONTAINERS } from './config.js';
 import { logger } from './logger.js';
+import { stopContainer } from './container-runtime.js';
 
 interface QueuedTask {
   id: string;
@@ -234,8 +235,23 @@ export class GroupQueue {
         state.groupFolder = null;
         this.activeCount--;
         this.drainGroup(groupJid);
+      } else {
+        // Persistent container exited unexpectedly — clean up and schedule restart.
+        // Reset persistent=false in GroupState so the restart goes through normal
+        // runForGroup flow. The flag will be re-set via registerProcess when the
+        // new container starts (read from group.containerConfig.persistent).
+        logger.warn(
+          { groupJid },
+          'Persistent container exited, scheduling restart',
+        );
+        state.active = false;
+        state.persistent = false;
+        state.process = null;
+        state.containerName = null;
+        state.groupFolder = null;
+        this.activeCount--;
+        this.scheduleRetry(groupJid, state);
       }
-      // Persistent containers stay active — no cleanup, no drain
     }
   }
 
@@ -355,19 +371,29 @@ export class GroupQueue {
   async shutdown(_gracePeriodMs: number): Promise<void> {
     this.shuttingDown = true;
 
-    // Count active containers but don't kill them — they'll finish on their own
-    // via idle timeout or container timeout. The --rm flag cleans them up on exit.
-    // This prevents WhatsApp reconnection restarts from killing working agents.
     const activeContainers: string[] = [];
+    const persistentContainers: string[] = [];
+
     for (const [jid, state] of this.groups) {
       if (state.process && !state.process.killed && state.containerName) {
-        activeContainers.push(state.containerName);
+        if (state.persistent) {
+          // Persistent containers: docker stop for clean shutdown
+          persistentContainers.push(state.containerName);
+          exec(stopContainer(state.containerName), { timeout: 15000 });
+        } else {
+          // Regular containers: detach, let them finish on their own
+          activeContainers.push(state.containerName);
+        }
       }
     }
 
     logger.info(
-      { activeCount: this.activeCount, detachedContainers: activeContainers },
-      'GroupQueue shutting down (containers detached, not killed)',
+      {
+        activeCount: this.activeCount,
+        detachedContainers: activeContainers,
+        stoppedPersistent: persistentContainers,
+      },
+      'GroupQueue shutting down',
     );
   }
 }
