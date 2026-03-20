@@ -108,6 +108,7 @@ A personal Claude assistant accessible via WhatsApp, with minimal custom code.
 - Containers provide filesystem isolation - agents can only see mounted paths
 - Bash access is safe because commands run inside the container, not on the host
 - Browser automation via agent-browser with Chromium in the container
+- **Persistent containers**: Groups with `containerConfig.persistent: true` run containers that stay alive between messages — no idle timeout, auto-start on boot, explicit `docker stop` on shutdown, auto-restart on crash
 
 ### Scheduled Tasks
 - Users can ask Claude to schedule recurring or one-time tasks from any group

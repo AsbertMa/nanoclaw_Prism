@@ -10,6 +10,7 @@
 
 ## 相比上游的改动
 
+- **持久容器** — 支持 `containerConfig.persistent: true`，容器在消息之间保持存活，开机自启，关机显式停止，崩溃自动重启
 - **容器技能** — 新增 `frontend-design`、`skill-creator` 等技能
 - **Session 快速恢复** — 改进 session resume 逻辑，支持 `maxResumeMessages` 和 `additionalMounts` 配置
 - **Host Bot 脚本** — `scripts/host-bot.ts`，用于本地调试 bot
