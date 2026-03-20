@@ -169,10 +169,13 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     ASSISTANT_NAME,
   );
 
-  if (missedMessages.length === 0) return true;
+  const isPersistent = group.containerConfig?.persistent === true;
+
+  if (missedMessages.length === 0 && !isPersistent) return true;
 
   // For non-main groups, check if trigger is required and present
-  if (!isMainGroup && group.requiresTrigger !== false) {
+  // Persistent containers skip trigger check — they auto-start
+  if (!isMainGroup && !isPersistent && group.requiresTrigger !== false) {
     const allowlistCfg = loadSenderAllowlist();
     const hasTrigger = missedMessages.some(
       (m) =>
@@ -182,14 +185,19 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (!hasTrigger) return true;
   }
 
-  const prompt = formatMessages(missedMessages, TIMEZONE);
+  const prompt =
+    missedMessages.length > 0
+      ? formatMessages(missedMessages, TIMEZONE)
+      : '[system] Container started.';
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
   const previousCursor = lastAgentTimestamp[chatJid] || '';
-  lastAgentTimestamp[chatJid] =
-    missedMessages[missedMessages.length - 1].timestamp;
-  saveState();
+  if (missedMessages.length > 0) {
+    lastAgentTimestamp[chatJid] =
+      missedMessages[missedMessages.length - 1].timestamp;
+    saveState();
+  }
 
   logger.info(
     { group: group.name, messageCount: missedMessages.length },
@@ -198,7 +206,6 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   // Track idle timer for closing stdin when agent is idle
   // Persistent containers skip idle timeout — they stay alive between messages
-  const isPersistent = group.containerConfig?.persistent === true;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   const resetIdleTimer = () => {
@@ -327,7 +334,13 @@ async function runAgent(
         assistantName: ASSISTANT_NAME,
       },
       (proc, containerName) =>
-        queue.registerProcess(chatJid, proc, containerName, group.folder, group.containerConfig?.persistent),
+        queue.registerProcess(
+          chatJid,
+          proc,
+          containerName,
+          group.folder,
+          group.containerConfig?.persistent,
+        ),
       wrappedOnOutput,
     );
 
@@ -662,6 +675,18 @@ async function main(): Promise<void> {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');
     process.exit(1);
   });
+
+  // Auto-start persistent containers (they run continuously, not triggered by messages)
+  // Note: persistent containers count against MAX_CONCURRENT_CONTAINERS
+  for (const [jid, group] of Object.entries(registeredGroups)) {
+    if (group.containerConfig?.persistent) {
+      logger.info(
+        { group: group.name, jid },
+        'Auto-starting persistent container',
+      );
+      queue.enqueueMessageCheck(jid);
+    }
+  }
 }
 
 // Guard: only run when executed directly, not when imported by tests
