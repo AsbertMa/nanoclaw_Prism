@@ -282,6 +282,14 @@ function applyContainerConfig(
     containerConfig?.maxResumeMessages || SESSION_MAX_MESSAGES;
   args.splice(imageIdx, 0, '-e', `SESSION_MAX_MESSAGES=${maxMessages}`);
 
+  // Insert additional environment variables
+  if (containerConfig?.additionalEnv) {
+    const envIdx = args.lastIndexOf(CONTAINER_IMAGE);
+    for (const [key, value] of Object.entries(containerConfig.additionalEnv)) {
+      args.splice(envIdx, 0, '-e', `${key}=${value}`);
+    }
+  }
+
   // Insert port mappings
   if (containerConfig?.ports) {
     const newImageIdx = args.lastIndexOf(CONTAINER_IMAGE);
@@ -430,10 +438,13 @@ export async function runContainerAgent(
 
     let timedOut = false;
     let hadStreamingOutput = false;
+    const isPersistent = group.containerConfig?.persistent === true;
     const configTimeout = group.containerConfig?.timeout || CONTAINER_TIMEOUT;
-    // Grace period: hard timeout must be at least IDLE_TIMEOUT + 30s so the
-    // graceful _close sentinel has time to trigger before the hard kill fires.
-    const timeoutMs = Math.max(configTimeout, IDLE_TIMEOUT + 30_000);
+    // Persistent containers: 24h safety net (restarted on NanoClaw reboot anyway)
+    // Regular containers: hard timeout is at least IDLE_TIMEOUT + 30s
+    const timeoutMs = isPersistent
+      ? 24 * 60 * 60 * 1000
+      : Math.max(configTimeout, IDLE_TIMEOUT + 30_000);
 
     const killOnTimeout = () => {
       timedOut = true;
