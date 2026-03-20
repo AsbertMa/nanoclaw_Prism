@@ -197,9 +197,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   );
 
   // Track idle timer for closing stdin when agent is idle
+  // Persistent containers skip idle timeout — they stay alive between messages
+  const isPersistent = group.containerConfig?.persistent === true;
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   const resetIdleTimer = () => {
+    if (isPersistent) return; // Persistent containers never idle-timeout
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
       logger.debug(
