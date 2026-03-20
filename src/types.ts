@@ -33,6 +33,8 @@ export interface ContainerConfig {
   ports?: string[]; // Port mappings, e.g. ["8765:8765"]
   maxResumeMessages?: number; // Max transcript lines before forcing new session (default: 200)
   poolTokens?: string[]; // Per-group bot pool tokens (overrides global TELEGRAM_BOT_POOL)
+  additionalEnv?: Record<string, string>; // Extra environment variables passed to container
+  persistent?: boolean; // If true, container stays alive between messages (no idle timeout)
 }
 
 export interface RegisteredGroup {
